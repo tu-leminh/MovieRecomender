@@ -10,13 +10,17 @@ class HitRate(Evaluator):
         self.labelCol = labelCol
         self.userCol = userCol
         self.k = k
+        
+    def leaveOneOut(self, dataset):
+      windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.labelCol).desc)
+      return dataset.withColumn("row_number",row_number().over(windowSpec)).filter(F.col("row_numer") == 1)
 
-    def _evaluate(self, dataset):
-      windowSpec  = Window.partitionBy(self.userCol).orderBy(self.predictionCol)
+    def _evaluate(self, dataset, gt):
+      windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.predictionCol).desc)
       dataset = dataset.withColumn("row_number",row_number().over(windowSpec))
 
       #count hit
-      res = dataset.filter(F.col("row_number") <= 10).groupBy(self.userCol).agg(F.sum(F.when(dataset[self.labelCol].isNull(), 0).otherwise(1)).alias("count"))
+      res = dataset.filter(F.col("row_number") <= self.k).groupBy(self.userCol).agg(F.sum(F.when(dataset[self.labelCol].isNull(), 0).otherwise(1)).alias("count"))
       res.show()
       res = res.agg(F.count(F.col("count") >= 1).alias("hit"))
 
