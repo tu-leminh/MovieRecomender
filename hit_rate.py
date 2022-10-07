@@ -1,4 +1,3 @@
-from itertools import count
 import pyspark.sql.functions as F
 from pyspark.ml.evaluation import Evaluator
 from pyspark.sql.window import Window
@@ -7,12 +6,14 @@ from pyspark.ml import Estimator
 from pyspark.sql import DataFrame
 
 class HitRate(Evaluator):
-    def __init__(self, predictionCol='prediction', labelCol='label', userCol = 'userID', rowNumber = 'rowNumber', k = 10):
+    def __init__(self, predictionCol='prediction', labelCol='label', userCol = 'userID', itemCol = 'itemID', rowNumber = 'RowNumber', k = 10, repeats = 100):
         self.predictionCol = predictionCol
         self.labelCol = labelCol
         self.userCol = userCol
+        self.itemCol = itemCol
         self.rowNumber = rowNumber
         self.k = k
+        self.repeats = repeats
         
     def leaveOneOut(self, dataset):
       windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.labelCol).desc)
@@ -20,36 +21,43 @@ class HitRate(Evaluator):
 
     def eval(self, dataframe : DataFrame, estimator : Estimator) -> float:
       totalHit = 0
-      for userRow in dataframe.selectExpr("distinct({})".format(self.userCol)).take(100):
+      user_df = dataframe.select(self.userCol).distinct()
+      movie_df = dataframe.select(self.itemCol).distinct()
+      for userRow in user_df.take(self.repeats):
         userID = userRow[self.userCol]
+      
         # leave one out
-        loo_df = dataframe.filter('{}!={} or {}!={}'.format(self.rowNumber, 1, self.userCol, userID))
-        left_out = dataframe.filter('{}={} and {}={}'.format(self.rowNumber, 1, self.userCol, userID))
-        model = estimator.fit(loo_df)
+        leave_out_condition = '{}!={} or {}!={}'.format(self.rowNumber, 1, self.userCol, userID)
+        keep_one_condition = '{}={} and {}={}'.format(self.rowNumber, 1, self.userCol, userID)
+        loo_df = dataframe.filter(leave_out_condition)
+        left_out = dataframe.filter(keep_one_condition).first()
 
-        result = model.transform(dataframe)
-        result.show()
-        windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.predictionCol).desc)
+        check_condition = "{}={} and {}={} and prediction_row_number <= {}". \
+                format(self.userCol, left_out[self.userCol], self.itemCol, left_out[self.itemCol], self.k)
+
+        model = estimator.fit(loo_df.dropna())
+        test = movie_df.withColumn(self.userCol, F.lit(userID))
+        result = model.transform(test)
+        
+        windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.predictionCol).desc())
         result = result.withColumn("prediction_row_number", row_number().over(windowSpec))
-        isEmpty = result.selectExpr("'{}'={} and '{}'={}".format(self.userCol, left_out[self.userCol], "MovieID", left_out["MovieID"])).rdd.isEmpty()
+        isEmpty = result.filter(check_condition).rdd.isEmpty()
+        
+        print("Left out: {} with rating of {} and ranking of {}".format(left_out[self.itemCol], left_out[self.labelCol], left_out[self.rowNumber]))
+        result.filter("{}={} and {}={}". \
+                format(self.userCol, left_out[self.userCol], self.itemCol, left_out[self.itemCol], self.k), ).show()
 
-        if (isEmpty):
+        if not (isEmpty):
+          print(userID + " is a hit")
           totalHit = totalHit + 1
-      print(totalHit)
+
+        loo_df.unpersist(blocking = True)
+        test.unpersist(blocking = True)
+        result.unpersist(blocking = True)
+      return totalHit / self.repeats
 
     def _evaluate(self, dataset, gt):
-      windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.predictionCol).desc)
-      dataset = dataset.withColumn("row_number",row_number().over(windowSpec))
-
-      #count hit
-      res = dataset.filter(F.col("row_number") <= self.k).groupBy(self.userCol).agg(F.sum(F.when(dataset[self.labelCol].isNull(), 0).otherwise(1)).alias("count"))
-      res.show()
-      res = res.agg(F.count(F.col("count") >= 1).alias("hit"))
-
-      #count user
-      user_count = dataset.agg(F.countDistinct(self.userCol).alias("total"))
-
-      return res.first()["hit"] / user_count.first()["total"]
+      return
 
     def isLargerBetter(self):
         return True
