@@ -17,16 +17,14 @@ class HitRate():
     def leaveOneOut(self, dataset):
       windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.labelCol).desc())
       tmp = dataset.withColumn("row_number",row_number().over(windowSpec))
-      tmp.cache().count()
+      tmp.persist().count()
       train = tmp.filter(F.col("row_number") != 1)
-      train.cache().count()
-
       test = tmp.filter(F.col("row_number") == 1)
-      test.cache().count()
+      
+      test.persist().count()
       return [train, test]
 
     def eval(self, estimator:Estimator, dataframe : DataFrame) -> float:
-      totalHit = 0
       user_df = dataframe.select(self.userCol).distinct()
       movie_df = dataframe.select(self.itemCol).distinct()
       full_matrix = user_df.crossJoin(movie_df)
@@ -38,8 +36,5 @@ class HitRate():
       result = model.transform(full_matrix)
       result = result.withColumn("prediction_row_number", row_number().over(windowSpec))
       result = result.filter(result["prediction_row_number"] <= self.k)
-      result.show()
-      test.show()
       tmp = result.join(test, (result[self.userCol] == test[self.userCol]) & (result[self.itemCol] == result[self.itemCol]), "inner")
-      tmp.show()
       return tmp.count() / user_df.count()
