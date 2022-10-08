@@ -14,17 +14,9 @@ class HitRate():
         self.rowNumber = rowNumber
         self.k = k
         
-    def leaveOneOut(self, dataset):
-      windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.labelCol).desc())
-      tmp = dataset.withColumn("row_number",row_number().over(windowSpec))      
-      train = tmp.filter(F.col("row_number") != 1)
-      test = tmp.filter(F.col("row_number") == 1)
-
-      return [train, test]
-
-    def eval( self, estimator:Estimator, dataframe, full_matrix, \
-              item_count, user_count) -> float:
-      [train, test] = self.leaveOneOut(dataframe)
+    def eval( self, estimator:Estimator, left_out_dataframe, keep_one_dataframe, full_matrix, user_count) -> float:
+      
+      [train, test] = [left_out_dataframe, keep_one_dataframe]
       model = estimator.fit(train)
 
       windowSpec  = Window.partitionBy(self.userCol).orderBy(F.col(self.predictionCol).desc())
